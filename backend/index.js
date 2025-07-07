@@ -214,7 +214,7 @@ app.get('/travels', async (req, res) => {
 
 app.get('/travels/filter', async (req, res) => {
   const { name, initial, fromDate, toDate, sof } = req.query;
-  let query = 'SELECT id, Initial, Name, PositionDesignation, Station, Purpose, Host, DATE_FORMAT ping(DatesFrom, \'%Y-%m-%d\') as DatesFrom, DATE_FORMAT(DatesTo, \'%Y-%m-%d\') as DatesTo, Destination, Area, sof, Attachment FROM TravelAuthority WHERE 1=1';
+  let query = 'SELECT id, Initial, Name, PositionDesignation, Station, Purpose, Host, DATE_FORMAT(DatesFrom, \'%Y-%m-%d\') as DatesFrom, DATE_FORMAT(DatesTo, \'%Y-%m-%d\') as DatesTo, Destination, Area, sof, Attachment FROM TravelAuthority WHERE 1=1';
   const params = [];
   if (name) { query += ' AND Name LIKE ?'; params.push(`%${name}%`); }
   if (initial) { query += ' AND Initial = ?'; params.push(initial); }
@@ -351,7 +351,7 @@ app.delete('/travels/:id', async (req, res) => {
   }
 });
 
-// === Selective Delete Endpoint ===
+// === Selective Delete Endpoint for TravelAuthority ===
 app.post('/travels/delete', async (req, res) => {
   const { ids, fromDate, toDate } = req.body;
   if (!ids && !fromDate && !toDate) return res.status(400).json({ error: 'At least one filter is required' });
@@ -469,6 +469,30 @@ app.get('/travels/graph', async (req, res) => {
 });
 
 // === Appointment CRUD ===
+
+
+// GET all appointments
+// Assume a simple in-memory cache (replace with your actual cache implementation)
+const cache = new Map();
+
+function getCache(key) {
+  return cache.get(key);
+}
+
+function setCache(key, value) {
+  cache.set(key, value);
+}
+
+function invalidateCache(key) {
+  cache.delete(key);
+}
+
+function invalidateAllCacheForType(type) {
+  const keysToInvalidate = Array.from(cache.keys()).filter(key => key.startsWith(`${type}-`));
+  keysToInvalidate.forEach(invalidateCache);
+}
+
+// Validate appointment function remains unchanged
 const validateAppointment = (a, checkAll = true) => {
   return (
     a.name && a.positionTitle && a.statusAppointment &&
@@ -477,7 +501,7 @@ const validateAppointment = (a, checkAll = true) => {
   );
 };
 
-// GET all appointments
+// GET all appointments (no cache needed, so unchanged)
 app.get('/appointments', async (req, res) => {
   try {
     const [results] = await pool.query('SELECT * FROM appointment');
@@ -514,6 +538,8 @@ app.post('/appointments', upload.single('attachment'), async (req, res) => {
       attachmentPath
     ]);
     await connection.commit();
+    // Invalidate cache for all graph types since a new appointment affects all aggregations
+    ['year', 'month', 'week', 'date'].forEach(invalidateAllCacheForType);
     res.status(201).json({ id: result.insertId, pdfPath: attachmentPath });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -571,6 +597,8 @@ app.put('/appointments/:id', upload.single('attachment'), async (req, res) => {
       }
     }
     await connection.commit();
+    // Invalidate cache for all graph types
+    ['year', 'month', 'week', 'date'].forEach(invalidateAllCacheForType);
     res.json({ message: 'Appointment updated', pdfPath: attachmentPath || oldAttachmentPath });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -614,6 +642,8 @@ app.delete('/appointments/:id', async (req, res) => {
       }
     }
     await connection.commit();
+    // Invalidate cache for all graph types
+    ['year', 'month', 'week', 'date'].forEach(invalidateAllCacheForType);
     res.json({ message: 'Appointment deleted' });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -624,10 +654,61 @@ app.delete('/appointments/:id', async (req, res) => {
   }
 });
 
-// BULK upload appointments
+// POST selective delete appointments
+app.post('/appointments/delete', async (req, res) => {
+  const { ids, fromDate, toDate } = req.body;
+  if (!ids && !fromDate && !toDate) return res.status(400).json({ error: 'At least one filter (ids, fromDate, or toDate) is required' });
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    
+    let selectQuery = 'SELECT pdfPath FROM appointment WHERE 1=1';
+    const selectParams = [];
+    if (Array.isArray(ids) && ids.length) { selectQuery += ' AND id IN (?)'; selectParams.push(ids); }
+    if (fromDate) { selectQuery += ' AND DateSigned >= ?'; selectParams.push(parseDMYtoYMD(fromDate)); }
+    if (toDate) { selectQuery += ' AND DateSigned <= ?'; selectParams.push(parseDMYtoYMD(toDate)); }
+    
+    const [attachments] = await connection.query(selectQuery, selectParams);
+    
+    let deleteQuery = 'DELETE FROM appointment WHERE 1=1';
+    const deleteParams = [];
+    if (Array.isArray(ids) && ids.length) { deleteQuery += ' AND id IN (?)'; deleteParams.push(ids); }
+    if (fromDate) { deleteQuery += ' AND DateSigned >= ?'; deleteParams.push(parseDMYtoYMD(fromDate)); }
+    if (toDate) { deleteQuery += ' AND DateSigned <= ?'; deleteParams.push(parseDMYtoYMD(toDate)); }
+    
+    const [result] = await connection.query(deleteQuery, deleteParams);
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'No matching appointments found' });
+    }
+    
+    for (const attachment of attachments) {
+      if (attachment.pdfPath) {
+        try {
+          fs.unlinkSync(path.join(__dirname, 'Uploads', attachment.pdfPath.replace('/uploads/', '')));
+        } catch (unlinkErr) {
+          console.warn('Warning: Failed to delete attachment:', unlinkErr.message);
+        }
+      }
+    }
+    await connection.commit();
+    // Invalidate cache for all graph types
+    ['year', 'month', 'week', 'date'].forEach(invalidateAllCacheForType);
+    res.json({ message: `${result.affectedRows} appointments deleted` });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('Error deleting appointments:', err);
+    res.status(500).json({ error: 'Failed to delete appointments', details: err.message });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// BULK upload appointments (unchanged, no cache invalidation needed on insert)
 app.post('/appointments/bulk', async (req, res) => {
   const { appointments } = req.body;
-  if (!Array.isArray(appointments) || appointments.length === 0) {
+  if (!Array.isArray(appointments) || !appointments.length) {
     return res.status(400).json({ error: 'No data provided' });
   }
 
@@ -646,7 +727,7 @@ app.post('/appointments/bulk', async (req, res) => {
     a.schoolOffice,
     a.natureAppointment || '',
     a.itemNo || '',
-    a.DateSigned,
+    parseDMYtoYMD(a.DateSigned),
     null // pdfPath is null for bulk upload
   ]);
 
@@ -659,6 +740,8 @@ app.post('/appointments/bulk', async (req, res) => {
       VALUES ?`;
     const [result] = await connection.query(query, [values]);
     await connection.commit();
+    // Invalidate cache for all graph types since bulk insert affects all aggregations
+    ['year', 'month', 'week', 'date'].forEach(invalidateAllCacheForType);
     res.status(201).json({ message: `${result.affectedRows} appointments inserted successfully` });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -701,6 +784,8 @@ app.post('/appointments/:id/attachment', upload.single('attachment'), async (req
       }
     }
     await connection.commit();
+    // Invalidate cache for all graph types since attachment update might affect metadata
+    ['year', 'month', 'week', 'date'].forEach(invalidateAllCacheForType);
     res.json({ message: 'File uploaded successfully', path: attachmentPath });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -713,6 +798,38 @@ app.post('/appointments/:id/attachment', upload.single('attachment'), async (req
     res.status(500).json({ error: 'Failed to upload attachment', details: err.message });
   } finally {
     if (connection) connection.release();
+  }
+});
+
+// GET graph data (unchanged)
+app.get('/appointments/graph', async (req, res) => {
+  const { type, name, statusAppointment, year, month } = req.query;
+  if (!['year', 'month', 'week', 'date'].includes(type)) return res.status(400).json({ error: 'Invalid type' });
+  const cacheKey = `${type}-${name || 'all'}-${statusAppointment || 'all'}-${year || 'all'}-${month || 'all'}`;
+  const cached = getCache(cacheKey);
+  if (cached) return res.json(cached);
+  const groupFormat = {
+    year: { label: 'YEAR(DateSigned)', groupBy: 'YEAR(DateSigned)', orderBy: 'YEAR(DateSigned)' },
+    month: { label: "CONCAT(YEAR(DateSigned), '-', LPAD(MONTH(DateSigned), 2, '0'))", groupBy: 'YEAR(DateSigned), MONTH(DateSigned)', orderBy: 'YEAR(DateSigned), MONTH(DateSigned)' },
+    week: { label: "CONCAT(YEAR(DateSigned), '-W', LPAD(WEEK(DateSigned), 2, '0'))", groupBy: 'YEAR(DateSigned), WEEK(DateSigned)', orderBy: 'YEAR(DateSigned), WEEK(DateSigned)' },
+    date: { label: "DATE_FORMAT(DateSigned, '%Y-%m-%d')", groupBy: 'DATE(DateSigned)', orderBy: 'DATE(DateSigned)' },
+  }[type] || { label: 'YEAR(DateSigned)', groupBy: 'YEAR(DateSigned)', orderBy: 'YEAR(DateSigned)' }; // Default to year
+  let query = `SELECT ${groupFormat.label} AS label, COUNT(*) AS count FROM appointment WHERE DateSigned IS NOT NULL`;
+  const params = [];
+  if (name) { query += ' AND name LIKE ?'; params.push(`%${name}%`); }
+  if (statusAppointment) { query += ' AND statusAppointment = ?'; params.push(statusAppointment); }
+  if (year) { query += ' AND YEAR(DateSigned) = ?'; params.push(year); }
+  if (month) { query += ' AND MONTH(DateSigned) = ?'; params.push(month); }
+  query += ` GROUP BY ${groupFormat.groupBy} ORDER BY ${groupFormat.orderBy}`;
+  try {
+    const [results] = await pool.query(query, params);
+    const response = results.length
+      ? { labels: results.map(r => r.label), datasets: [{ label: `Appointments by ${type}`, data: results.map(r => r.count), backgroundColor: 'rgba(75, 192, 192, 0.6)' }] }
+      : { labels: [], datasets: [{ label: `Appointments by ${type}`, data: [], backgroundColor: 'rgba(75, 192, 192, 0.6)' }] };
+    setCache(cacheKey, response);
+    res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve graph data', details: err.message });
   }
 });
 

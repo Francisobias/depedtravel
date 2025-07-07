@@ -2,7 +2,12 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
+import { Bar } from 'react-chartjs-2';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import './Appointment.css';
+
+// Register Chart.js components
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 const initialFormState = {
   name: '',
@@ -26,6 +31,8 @@ function Appointment() {
   const [pdfFile, setPdfFile] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [selectedAppointments, setSelectedAppointments] = useState(new Set());
+  const [chartData, setChartData] = useState({ labels: [], datasets: [] });
+  const [chartLoading, setChartLoading] = useState(true);
   const formRef = useRef(null);
 
   const navigate = useNavigate();
@@ -49,15 +56,31 @@ function Appointment() {
       const data = await res.json();
       setAppointments(data);
     } catch (err) {
-      setError(err.message);
+      setError(`Failed to load appointments: ${err.message}`);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const fetchChartData = useCallback(async () => {
+    setChartLoading(true);
+    try {
+      const res = await fetch('http://localhost:3000/appointments/graph?type=year');
+      if (!res.ok) throw new Error(`Failed to fetch chart data: ${res.statusText}`);
+      const data = await res.json();
+      setChartData(data || { labels: [], datasets: [{ label: 'Appointments by Year', data: [], backgroundColor: 'rgba(75, 192, 192, 0.6)' }] });
+    } catch (err) {
+      setError(`Failed to load chart data: ${err.message}`);
+      setChartData({ labels: [], datasets: [{ label: 'Appointments by Year', data: [], backgroundColor: 'rgba(75, 192, 192, 0.6)' }] });
+    } finally {
+      setChartLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchAppointments();
-  }, [fetchAppointments]);
+    fetchChartData();
+  }, [fetchAppointments, fetchChartData]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -119,10 +142,23 @@ function Appointment() {
         if (!uploadRes.ok) throw new Error(`Failed to upload PDF: ${uploadRes.statusText}`);
       }
 
-      fetchAppointments();
+      await fetchAppointments();
+      await fetchChartData();
       resetForm();
+      Swal.fire({
+        title: 'Success!',
+        text: `${editingId ? 'Updated' : 'Added'} appointment successfully!`,
+        icon: 'success',
+        confirmButtonColor: '#10b981',
+      });
     } catch (err) {
       setError(err.message);
+      Swal.fire({
+        title: 'Error',
+        text: err.message,
+        icon: 'error',
+        confirmButtonColor: '#10b981',
+      });
     } finally {
       setActionLoading(prev => ({ ...prev, save: false }));
     }
@@ -171,8 +207,21 @@ function Appointment() {
           newSet.delete(id);
           return newSet;
         });
+        await fetchChartData();
+        Swal.fire({
+          title: 'Success!',
+          text: 'Appointment deleted successfully!',
+          icon: 'success',
+          confirmButtonColor: '#10b981',
+        });
       } catch (err) {
         setError(err.message);
+        Swal.fire({
+          title: 'Error',
+          text: err.message,
+          icon: 'error',
+          confirmButtonColor: '#10b981',
+        });
       } finally {
         setActionLoading(prev => ({ ...prev, delete: { ...prev.delete, [id]: false } }));
       }
@@ -180,6 +229,16 @@ function Appointment() {
   };
 
   const handleBulkDelete = async () => {
+    if (selectedAppointments.size === 0) {
+      Swal.fire({
+        title: 'Error',
+        text: 'Please select at least one appointment.',
+        icon: 'error',
+        confirmButtonColor: '#10b981',
+      });
+      return;
+    }
+
     const result = await Swal.fire({
       title: 'Are you sure?',
       text: `This will permanently delete ${selectedAppointments.size} appointment(s)!`,
@@ -190,21 +249,41 @@ function Appointment() {
       confirmButtonText: 'Yes, delete them!',
       cancelButtonText: 'No, cancel',
     });
+
     if (result.isConfirmed) {
       setActionLoading(prev => ({ ...prev, bulkDelete: true }));
       setError(null);
 
       try {
-        const res = await fetch('http://localhost:3000/appointments/bulk-delete', {
-          method: 'DELETE',
+        const payload = { ids: Array.from(selectedAppointments) };
+        const res = await fetch('http://localhost:3000/appointments/delete', {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: Array.from(selectedAppointments) }),
+          body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error(`Failed to delete selected appointments: ${res.statusText}`);
-        fetchAppointments();
+
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error || `Failed to delete appointments: ${res.statusText}`);
+        }
+
+        const data = await res.json();
+        await fetchAppointments();
         setSelectedAppointments(new Set());
+        await fetchChartData();
+        Swal.fire({
+          title: 'Success!',
+          text: data.message,
+          icon: 'success',
+          confirmButtonColor: '#10b981',
+        });
       } catch (err) {
-        setError(err.message);
+        Swal.fire({
+          title: 'Error',
+          text: `Bulk delete failed: ${err.message}`,
+          icon: 'error',
+          confirmButtonColor: '#10b981',
+        });
       } finally {
         setActionLoading(prev => ({ ...prev, bulkDelete: false }));
       }
@@ -216,7 +295,12 @@ function Appointment() {
     if (!file) return;
 
     if (!file.name.match(/\.(xlsx|xls)$/)) {
-      setError('Only Excel files (.xlsx, .xls) are allowed');
+      Swal.fire({
+        title: 'Error',
+        text: 'Only Excel files (.xlsx, .xls) are allowed',
+        icon: 'error',
+        confirmButtonColor: '#10b981',
+      });
       e.target.value = '';
       return;
     }
@@ -233,21 +317,28 @@ function Appointment() {
 
         const appointmentsData = parsed
           .filter(row => row['name'])
-          .map(row => ({
-            name: row['name']?.toString() || '',
-            positionTitle: row['positionTitle']?.toString() || '',
-            statusAppointment: row['statusAppointment']?.toString() || 'Scheduled',
-            schoolOffice: row['schoolOffice']?.toString() || '',
-            natureAppointment: row['natureAppointment']?.toString() || '',
-            itemNo: row['itemNo']?.toString() || '',
-            DateSigned: row['DateSigned']
-              ? new Date(row['DateSigned']).toISOString().split('T')[0]
-              : '',
-          }))
-          .filter(row => row.name && row.positionTitle && row.statusAppointment && row.schoolOffice && row.DateSigned);
+          .map(row => {
+            const appointment = {
+              name: row['name']?.toString() || '',
+              positionTitle: row['positionTitle']?.toString() || '',
+              statusAppointment: row['statusAppointment']?.toString() || 'Scheduled',
+              schoolOffice: row['schoolOffice']?.toString() || '',
+              natureAppointment: row['natureAppointment']?.toString() || '',
+              itemNo: row['itemNo']?.toString() || '',
+              DateSigned: row['DateSigned']
+                ? new Date(row['DateSigned']).toISOString().split('T')[0]
+                : '',
+            };
+            if (!appointment.name || !appointment.positionTitle || !appointment.statusAppointment || !appointment.schoolOffice || !appointment.DateSigned) {
+              console.warn('Skipping row due to missing required fields:', row);
+              return null;
+            }
+            return appointment;
+          })
+          .filter(appointment => appointment !== null);
 
-        if (!appointmentsData.length) {
-          throw new Error('No valid data found in Excel file');
+        if (appointmentsData.length === 0) {
+          throw new Error('No valid data found in Excel file. Ensure required fields (Name, Position Title, Status, School Office, Date Signed) are present.');
         }
 
         const res = await fetch('http://localhost:3000/appointments/bulk', {
@@ -255,12 +346,27 @@ function Appointment() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ appointments: appointmentsData }),
         });
-        if (!res.ok) throw new Error(`Bulk upload failed: ${res.statusText}`);
-        const result = await res.json();
-        alert(result.message);
-        fetchAppointments();
+
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error || `Bulk upload failed: ${res.statusText}`);
+        }
+
+        await fetchAppointments();
+        await fetchChartData();
+        Swal.fire({
+          title: 'Success!',
+          text: `${appointmentsData.length} appointment(s) uploaded successfully!`,
+          icon: 'success',
+          confirmButtonColor: '#10b981',
+        });
       } catch (err) {
-        setError(err.message);
+        Swal.fire({
+          title: 'Error',
+          text: `Bulk upload failed: ${err.message}`,
+          icon: 'error',
+          confirmButtonColor: '#10b981',
+        });
       } finally {
         setActionLoading(prev => ({ ...prev, bulk: false }));
         e.target.value = '';
@@ -296,14 +402,32 @@ function Appointment() {
     });
   };
 
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      y: {
+        beginAtZero: true,
+        title: { display: true, text: 'Number of Appointments' },
+      },
+      x: {
+        title: { display: true, text: 'Year' },
+      },
+    },
+  };
+
   const filteredAppointments = appointments
     .filter(app => {
       const term = searchTerm.toLowerCase();
+      const date = app.DateSigned ? new Date(app.DateSigned).toLocaleDateString() : '';
       return (
         app.name?.toLowerCase().includes(term) ||
         app.positionTitle?.toLowerCase().includes(term) ||
         app.statusAppointment?.toLowerCase().includes(term) ||
-        app.schoolOffice?.toLowerCase().includes(term)
+        app.schoolOffice?.toLowerCase().includes(term) ||
+        app.natureAppointment?.toLowerCase().includes(term) ||
+        app.itemNo?.toLowerCase().includes(term) ||
+        date.includes(term)
       );
     })
     .sort((a, b) => {
@@ -354,7 +478,7 @@ function Appointment() {
           <div className="control-group">
             <input
               type="text"
-              placeholder="Search appointments..."
+              placeholder="Search appointments (name, position, status, office, nature, item, date)..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="search-input"
@@ -458,12 +582,20 @@ function Appointment() {
               </div>
               <div className="form-group full-width">
                 <label htmlFor="pdf-upload">Attachment (PDF)</label>
+                <button
+                  type="button"
+                  className="pdf-upload-button"
+                  onClick={() => document.getElementById('pdf-upload').click()}
+                >
+                  {pdfFile ? `Replace PDF: ${pdfFile.name}` : 'Attach PDF'}
+                </button>
                 <input
                   id="pdf-upload"
                   type="file"
                   accept="application/pdf"
                   onChange={handlePdfChange}
-                  className="file-input"
+                  className="file-input hidden"
+                  style={{ display: 'none' }}
                 />
                 {pdfFile && <span className="success-text">Selected: {pdfFile.name}</span>}
               </div>
@@ -493,86 +625,91 @@ function Appointment() {
           {filteredAppointments.length === 0 ? (
             <div className="no-data">No appointments available. Add or upload one above.</div>
           ) : (
-            <table className="appointments-table">
-              <thead>
-                <tr>
-                  <th>
-                    <input
-                      type="checkbox"
-                      onChange={handleSelectAll}
-                      checked={filteredAppointments.length > 0 && selectedAppointments.size === filteredAppointments.length}
-                    />
-                  </th>
-                  {['Name', 'Position', 'Status', 'School Office', 'Nature', 'Item No', 'Date Signed', 'PDF', 'Actions'].map(
-                    (header) => (
-                      <th
-                        key={header}
-                        className={header !== 'Actions' ? 'sortable' : ''}
-                        onClick={() =>
-                          header !== 'Actions' && handleSort(header.toLowerCase().replace(' ', ''))
-                        }
-                      >
-                        {header}
-                        {sortConfig.field === header.toLowerCase().replace(' ', '') && (
-                          <span>{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                        )}
-                      </th>
-                    )
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAppointments.map((app) => (
-                  <tr key={app.id}>
-                    <td>
+            <div className="table-container">
+              <table className="appointments-table">
+                <thead>
+                  <tr>
+                    <th>
                       <input
                         type="checkbox"
-                        checked={selectedAppointments.has(app.id)}
-                        onChange={() => handleSelectAppointment(app.id)}
-                        disabled={actionLoading.delete[app.id]}
+                        onChange={handleSelectAll}
+                        checked={filteredAppointments.length > 0 && filteredAppointments.every(app => selectedAppointments.has(app.id))}
                       />
-                    </td>
-                    <td>{app.name}</td>
-                    <td>{app.positionTitle}</td>
-                    <td>{app.statusAppointment}</td>
-                    <td>{app.schoolOffice}</td>
-                    <td>{app.natureAppointment}</td>
-                    <td>{app.itemNo}</td>
-                    <td>{app.DateSigned ? new Date(app.DateSigned).toLocaleDateString() : ''}</td>
-                    <td>
-                      {app.pdfPath ? (
-                        <a
-                          href={`http://localhost:3000${app.pdfPath}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                    </th>
+                    {['Name', 'Position', 'Status', 'School Office', 'Nature', 'Item No', 'Date Signed', 'PDF', 'Actions'].map(
+                      (header) => (
+                        <th
+                          key={header}
+                          className={header !== 'Actions' ? 'sortable' : ''}
+                          onClick={() =>
+                            header !== 'Actions' && handleSort(header.toLowerCase().replace(' ', ''))
+                          }
                         >
-                          View PDF
-                        </a>
-                      ) : (
-                        'No File'
-                      )}
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => handleEdit(app)}
-                        className="action-button edit"
-                        disabled={actionLoading.delete[app.id]}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(app.id)}
-                        className={`action-button delete ${actionLoading.delete[app.id] ? 'disabled' : ''}`}
-                        disabled={actionLoading.delete[app.id]}
-                      >
-                        {actionLoading.delete[app.id] ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </td>
+                          {header}
+                          {sortConfig.field === header.toLowerCase().replace(' ', '') && (
+                            <span>{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                          )}
+                        </th>
+                      )
+                    )}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filteredAppointments.map((app) => (
+                    <tr key={app.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedAppointments.has(app.id)}
+                          onChange={() => handleSelectAppointment(app.id)}
+                          disabled={actionLoading.delete[app.id]}
+                        />
+                      </td>
+                      <td>{app.name}</td>
+                      <td>{app.positionTitle}</td>
+                      <td>{app.statusAppointment}</td>
+                      <td>{app.schoolOffice}</td>
+                      <td>{app.natureAppointment}</td>
+                      <td>{app.itemNo}</td>
+                      <td>{app.DateSigned ? new Date(app.DateSigned).toLocaleDateString() : ''}</td>
+                      <td>
+                        {app.pdfPath ? (
+                          <a
+                            href={`http://localhost:3000${app.pdfPath}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            View PDF
+                          </a>
+                        ) : (
+                          'No File'
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => handleEdit(app)}
+                          className="action-button edit"
+                          disabled={actionLoading.delete[app.id]}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(app.id)}
+                          className={`action-button delete ${actionLoading.delete[app.id] ? 'disabled' : ''}`}
+                          disabled={actionLoading.delete[app.id]}
+                        >
+                          {actionLoading.delete[app.id] ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
+        </div>
+        <div className="chart-container" style={{ height: '300px', width: '600px' }}>
+          {chartLoading ? <div>Loading chart...</div> : <Bar data={chartData} options={chartOptions} />}
         </div>
       </main>
     </div>
