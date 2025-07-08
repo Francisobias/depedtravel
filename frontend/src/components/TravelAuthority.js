@@ -492,7 +492,7 @@ const TravelAuthority = () => {
 
   const handleExportExcel = () => {
     const worksheetData = filteredEntries.map((entry) => ({
-      Name: entry.Name || 'Unnamed',
+      Name: entry.fullname || 'Unnamed',
       Position: entry.PositionDesignation || 'N/A',
       Initial: entry.Initial || 'N/A',
       Station: entry.Station || 'N/A',
@@ -919,4 +919,4 @@ const TravelAuthority = () => {
   );
 };
 
-export default TravelAuthority;
+export default TravelAuthority; 

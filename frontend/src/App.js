@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import './App.css';
-import { useNavigate } from 'react-router-dom';
+import { useHistory } from 'react-router-dom'; // Changed from useNavigate
 
 function App() {
   const [employees, setEmployees] = useState([]);
@@ -10,7 +10,7 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState('');
-  const navigate = useNavigate();
+  const history = useHistory(); // Changed from useNavigate
 
   const initialForm = {
     office: '',
@@ -149,11 +149,11 @@ function App() {
     <div className="App">
       <h1>Employee Management</h1>
 
-      <button onClick={() => navigate('/travel-authority')} className="travel-btn">
+      <button onClick={() => history.push('/travel-authority')} className="travel-btn">
         Go to Travel Authority
       </button>
 
-      <button onClick={() => navigate('/appointment')} className="travel-btn">
+      <button onClick={() => history.push('/appointment')} className="travel-btn">
         Go to Appointment Management
       </button>
 

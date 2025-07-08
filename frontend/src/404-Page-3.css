@@ -1,65 +1,48 @@
-/* 404-Page-3.css */
-
+/* Center the 404 page content with a clean layout */
 .not-found-container {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100vh;
-  background: linear-gradient(135deg, #111827, #4b5563);
-  overflow: hidden;
-  position: relative;
-  animation: pulseGradient 8s ease-in-out infinite;
+  min-height: 100vh;
+  background-color: #f8f9fa; /* Light background for light theme */
+  color: #212529; /* Dark text for contrast */
+  padding: 20px;
+  transition: background-color 0.3s, color 0.3s;
 }
 
-@keyframes pulseGradient {
-  0% { background: linear-gradient(135deg, #111827, #4b5563); }
-  50% { background: linear-gradient(135deg, #1e293b, #64748b); }
-  100% { background: linear-gradient(135deg, #111827, #4b5563); }
+/* Dark theme support */
+@media (prefers-color-scheme: dark) {
+  .not-found-container {
+    background-color: #1a1a1a; /* Dark background */
+    color: #e9ecef; /* Light text */
+  }
 }
 
+/* Content wrapper for text and buttons */
 .not-found-content {
   text-align: center;
-  color: #fff;
-  padding: 2rem;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-  animation: slideIn 0.8s ease-out;
+  max-width: 600px;
+  width: 100%;
 }
 
-@keyframes slideIn {
-  0% { transform: translateY(50px); opacity: 0; }
-  100% { transform: translateY(0); opacity: 1; }
-}
-
+/* 404 title with glitch effect */
 .not-found-title {
-  font-size: 10rem;
-  font-weight: 700;
+  font-size: 6rem;
+  font-weight: bold;
   margin-bottom: 1rem;
-  line-height: 1;
-  position: relative;
-  animation: fadeIn 1s ease-in;
-}
-
-@keyframes fadeIn {
-  0% { opacity: 0; }
-  100% { opacity: 1; }
+  color: #dc3545; /* Bootstrap danger color for emphasis */
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
 }
 
 .glitch {
   position: relative;
-  display: inline-block;
-  animation: glitch 2s infinite;
-  color: #fff;
-}
-
-.glitch.paused {
-  animation-play-state: paused;
+  animation: glitch 1s linear infinite;
 }
 
 .glitch::before,
 .glitch::after {
-  content: "0";
+  content: '0';
   position: absolute;
   top: 0;
   left: 0;
@@ -68,19 +51,26 @@
 }
 
 .glitch::before {
-  color: #ff00ff;
-  animation: glitch-top 1s infinite;
+  color: #0dcaf0; /* Bootstrap info color for glitch effect */
+  animation: glitch-top 1s linear infinite;
   clip-path: polygon(0 0, 100% 0, 100% 33%, 0 33%);
   -webkit-clip-path: polygon(0 0, 100% 0, 100% 33%, 0 33%);
 }
 
 .glitch::after {
-  color: #00ffff;
-  animation: glitch-bottom 1.5s infinite;
+  color: #198754; /* Bootstrap success color for glitch effect */
+  animation: glitch-bottom 1.5s linear infinite;
   clip-path: polygon(0 67%, 100% 67%, 100% 100%, 0 100%);
   -webkit-clip-path: polygon(0 67%, 100% 67%, 100% 100%, 0 100%);
 }
 
+.paused,
+.paused::before,
+.paused::after {
+  animation-play-state: paused;
+}
+
+/* Glitch animations */
 @keyframes glitch {
   2%, 64% {
     transform: translate(2px, 0) skew(0deg);
@@ -101,7 +91,7 @@
     transform: translate(-2px, 2px);
   }
   62% {
-    transform: translate(13px, -1px) skew(-13deg);
+    transform: translate(0, 0) skew(5deg);
   }
 }
 
@@ -110,110 +100,74 @@
     transform: translate(-2px, 0);
   }
   4%, 60% {
-    transform: translate(-2px, 0);
+    transform: translate(2px, 0);
   }
   62% {
-    transform: translate(-22px, 5px) skew(21deg);
+    transform: translate(0, 0) skew(-5deg);
   }
 }
 
+/* Error message styling */
 .not-found-message {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   margin-bottom: 2rem;
-  max-width: 600px;
-  margin-left: auto;
-  margin-right: auto;
-  animation: fadeInUp 1.2s ease-in-out;
+  color: inherit; /* Inherit from parent for theme consistency */
 }
 
-@keyframes fadeInUp {
-  0% { opacity: 0; transform: translateY(20px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-
+/* Button group styling */
 .button-group {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   justify-content: center;
-  flex-wrap: wrap;
 }
 
-.back-button,
-.toggle-button {
+/* Button styling (extends Bootstrap's btn class) */
+.back-button {
   padding: 0.75rem 1.5rem;
   font-size: 1rem;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
+  border-radius: 0.25rem;
   transition: all 0.3s ease;
-  animation: bounceIn 1.5s ease-out;
-}
-
-@keyframes bounceIn {
-  0% { transform: scale(0.9); opacity: 0; }
-  50% { transform: scale(1.05); }
-  100% { transform: scale(1); opacity: 1; }
-}
-
-.back-button {
-  background-color: #f59e0b;
-  color: #fff;
 }
 
 .back-button:hover {
-  background-color: #d97706;
   transform: translateY(-2px);
 }
 
 .back-button.secondary {
-  background-color: #6b7280;
+  background-color: #6c757d; /* Bootstrap secondary color */
+  border-color: #6c757d;
 }
 
 .back-button.secondary:hover {
-  background-color: #4b5563;
-  transform: translateY(-2px);
+  background-color: #5c636a;
+  border-color: #5c636a;
 }
 
 .toggle-button {
-  background-color: #9333ea;
+  background-color: #0d6efd; /* Bootstrap primary color */
+  border-color: #0d6efd;
   color: #fff;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  border-radius: 0.25rem;
+  transition: all 0.3s ease;
 }
 
 .toggle-button:hover {
-  background-color: #7e22ce;
+  background-color: #0b5ed7;
+  border-color: #0a58ca;
   transform: translateY(-2px);
 }
 
-/* Floating Particles */
-.particle {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 50%;
-  animation: float 6s infinite;
-}
-
-.particle:nth-child(1) { top: 10%; left: 20%; animation-delay: 0s; }
-.particle:nth-child(2) { top: 30%; left: 80%; animation-delay: 1s; }
-.particle:nth-child(3) { top: 50%; left: 10%; animation-delay: 2s; }
-.particle:nth-child(4) { top: 70%; left: 70%; animation-delay: 3s; }
-.particle:nth-child(5) { top: 90%; left: 30%; animation-delay: 4s; }
-
-@keyframes float {
-  0% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-30px) scale(1.2); }
-  100% { transform: translateY(0) scale(1); }
-}
-
 /* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 576px) {
   .not-found-title {
-    font-size: 6rem;
+    font-size: 4rem;
   }
 
   .not-found-message {
-    font-size: 1.2rem;
+    font-size: 1rem;
   }
 
   .back-button,
@@ -221,9 +175,12 @@
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
   }
+}
 
-  .particle {
-    width: 6px;
-    height: 6px;
-  }
+/* Accessibility improvements */
+.not-found-container:focus-within,
+.back-button:focus,
+.toggle-button:focus {
+  outline: 3px solid #0d6efd;
+  outline-offset: 2px;
 }

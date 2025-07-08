@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { useNavigate } from 'react-router-dom';
+import { useHistory } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
@@ -19,6 +19,475 @@ const initialFormState = {
   DateSigned: '',
 };
 
+const ChatbotModal = ({ appointments, isOpen, onClose }) => {
+  const [messages, setMessages] = useState([
+    {
+      sender: 'bot',
+      text: 'Hi! I’m Grok, your Appointment Assistant. How can I help you today?',
+      options: [
+        { label: 'How to add an appointment?', value: 'add' },
+        { label: 'How to search appointments?', value: 'search' },
+        { label: 'How to upload Excel?', value: 'upload' },
+        { label: 'How to delete appointments?', value: 'delete' },
+        { label: 'Show recent appointments', value: 'recent' },
+        { label: 'View appointment stats', value: 'stats' },
+      ],
+      timestamp: new Date().toISOString(),
+    },
+  ]);
+  const [inputText, setInputText] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState(null);
+  const [conversationContext, setConversationContext] = useState(null);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(false);
+  const [speechSynthesisSupported, setSpeechSynthesisSupported] = useState(false);
+  const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const recognitionRef = useRef(null);
+
+  // Initialize Web Speech API
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      setSpeechRecognitionSupported(true);
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map(result => result[0].transcript)
+          .join('');
+        setInputText(transcript);
+      };
+
+      recognitionRef.current.onerror = (event) => {
+        setChatError(`Speech recognition error: ${event.error}`);
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+    }
+
+    if ('speechSynthesis' in window) {
+      setSpeechSynthesisSupported(true);
+    }
+  }, []);
+
+  // Scroll to bottom of messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Focus input when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      inputRef.current?.focus();
+    }
+  }, [isOpen]);
+
+  // Speak the latest bot message
+  useEffect(() => {
+    if (speechSynthesisSupported && messages.length > 0) {
+      const latestMessage = messages[messages.length - 1];
+      if (latestMessage.sender === 'bot' && !isSpeaking) {
+        speakMessage(latestMessage.text);
+      }
+    }
+  }, [messages, speechSynthesisSupported]);
+
+  const speakMessage = (text) => {
+    if (speechSynthesisSupported && !isSpeaking) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.volume = 1;
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const handleOptionClick = async (value) => {
+    setChatLoading(true);
+    setChatError(null);
+
+    const userMessage = { sender: 'user', text: value, timestamp: new Date().toISOString() };
+    setMessages(prev => [...prev, userMessage]);
+    setConversationContext(value);
+
+    try {
+      const recentAppointments = (appointments || [])
+        .sort(( Penn, b) => new Date(b.DateSigned) - new Date(Penn.DateSigned))
+        .slice(0, 3)
+        .map(app => ({
+          name: app.name || '',
+          positionTitle: app.positionTitle || '',
+          statusAppointment: app.statusAppointment || '',
+          schoolOffice: app.schoolOffice || '',
+          DateSigned: app.DateSigned ? new Date(app.DateSigned).toLocaleDateString() : '',
+        }));
+
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+      let response;
+      try {
+        const res = await fetch(`${API_URL}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: value, appointments, context: conversationContext }),
+        });
+
+        if (!res.ok) throw new Error(`Backend request failed: ${res.statusText}`);
+        const data = await res.json();
+        response = data.response || 'Sorry, I couldn’t process that. Try asking about app features!';
+      } catch (err) {
+        console.warn('Falling back to mock response:', err.message);
+        switch (value) {
+          case 'add':
+            response = 'To add an appointment, fill out the form with details like name, position title, status (Scheduled, Confirmed, or Completed), school office, and date signed. Click "Add Appointment" to save. Want tips on filling out the form?';
+            break;
+          case 'search':
+            response = 'Type in the search bar above the table to filter appointments by name, position, status, office, nature, item number, or date. Results update instantly. Need help with specific search terms?';
+            break;
+          case 'upload':
+            response = 'Click "Upload Excel" and select an Excel file (.xlsx or .xls). Ensure it has columns: name, positionTitle, statusAppointment, schoolOffice, and DateSigned. Missing fields will be skipped. Want a sample Excel template?';
+            break;
+          case 'delete':
+            response = 'Select appointments using the checkboxes and click "Delete Selected" for bulk deletion, or click "Delete" next to an appointment. Confirm the action when prompted. Need to recover deleted appointments?';
+            break;
+          case 'recent':
+            response = recentAppointments.length > 0
+              ? `Recent appointments:\n${recentAppointments.map(app => `- ${app.name} (${app.positionTitle}, ${app.DateSigned})`).join('\n')}. Want details on any of these?`
+              : 'No recent appointments found. Try adding one!';
+            break;
+          case 'stats':
+            response = `You have ${appointments.length} total appointments. Breakdown by status: ${
+              appointments.reduce((acc, app) => ({
+                ...acc,
+                [app.statusAppointment]: (acc[app.statusAppointment] || 0) + 1,
+              }), {})
+              ? Object.entries(
+                  appointments.reduce((acc, app) => ({
+                    ...acc,
+                    [app.statusAppointment]: (acc[app.statusAppointment] || 0) + 1,
+                  }), {})
+                )
+                  .map(([status, count]) => `${status}: ${count}`)
+                  .join(', ')
+              : 'No data'
+            }. Want to see the chart?`;
+            break;
+          case 'back':
+            response = 'Back to main options. How can I assist you now?';
+            break;
+          default:
+            response = 'I can help with adding, searching, uploading, deleting, or viewing appointment stats. Try the options below or ask a specific question.';
+        }
+      }
+
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'bot',
+          text: response,
+          options: value === 'recent' || value === 'stats'
+            ? [{ label: 'Back to main options', value: 'back' }]
+            : [
+                { label: 'Back to main options', value: 'back' },
+                { label: 'Ask another question', value: 'continue' },
+              ],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (err) {
+      setChatError(`Failed to get response: ${err.message}`);
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'bot',
+          text: 'Oops, something went wrong. Try the options below or type a question.',
+          options: [
+            { label: 'How to add an appointment?', value: 'add' },
+            { label: 'How to search appointments?', value: 'search' },
+            { label: 'How to upload Excel?', value: 'upload' },
+            { label: 'How to delete appointments?', value: 'delete' },
+            { label: 'Show recent appointments', value: 'recent' },
+            { label: 'View appointment stats', value: 'stats' },
+          ],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!inputText.trim()) return;
+
+    const userMessage = inputText.trim();
+    setMessages(prev => [...prev, { sender: 'user', text: userMessage, timestamp: new Date().toISOString() }]);
+    setInputText('');
+    setChatLoading(true);
+    setChatError(null);
+
+    try {
+      const recentAppointments = (appointments || [])
+        .sort((a, b) => new Date(b.DateSigned) - new Date(a.DateSigned))
+        .slice(0, 3)
+        .map(app => ({
+          name: app.name || '',
+          positionTitle: app.positionTitle || '',
+          statusAppointment: app.statusAppointment || '',
+          schoolOffice: app.schoolOffice || '',
+          DateSigned: app.DateSigned ? new Date(app.DateSigned).toLocaleDateString() : '',
+        }));
+
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+      let response;
+      try {
+        const res = await fetch(`${API_URL}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: userMessage, appointments, context: conversationContext }),
+        });
+        if (!res.ok) throw new Error(`Backend request failed: ${res.statusText}`);
+        const data = await res.json();
+        response = data.response || 'Sorry, I couldn’t process that. Try asking about app features!';
+      } catch (err) {
+        console.warn('Falling back to mock response:', err.message);
+        const userMessageLower = userMessage.toLowerCase();
+        if (userMessageLower.includes('add') || userMessageLower.includes('create')) {
+          response = conversationContext === 'add'
+            ? 'For adding appointments, ensure all required fields (name, position title, status, school office, date signed) are filled. You can also attach a PDF. Need a specific field explained?'
+            : 'To add an appointment, fill out the form at the top with name, position, status, school office, and date signed. Click "Add Appointment" to save. Want tips on filling out the form?';
+          setConversationContext('add');
+        } else if (userMessageLower.includes('search') || userMessageLower.includes('find')) {
+          response = conversationContext === 'search'
+            ? 'Try specific terms like "John Doe" or "Scheduled" in the search bar. You can also sort by clicking column headers. Want to search for a specific appointment?'
+            : 'Use the search bar above the table to filter by name, position, status, office, nature, item number, or date. Results update instantly. Need help with specific search terms?';
+          setConversationContext('search');
+        } else if (userMessageLower.includes('upload') || userMessageLower.includes('excel')) {
+          response = conversationContext === 'upload'
+            ? 'Ensure your Excel file has columns named exactly: name, positionTitle, statusAppointment, schoolOffice, DateSigned. Want a sample Excel template?'
+            : 'Click "Upload Excel" and select an Excel file (.xlsx or .xls). Ensure it has columns: name, positionTitle, statusAppointment, schoolOffice, and DateSigned. Missing fields will be skipped.';
+          setConversationContext('upload');
+        } else if (userMessageLower.includes('delete') || userMessageLower.includes('remove')) {
+          response = conversationContext === 'delete'
+            ? 'You can’t recover deleted appointments, so double-check before confirming. Want to know how to select multiple appointments?'
+            : 'Select appointments using checkboxes and click "Delete Selected" for bulk deletion, or click "Delete" next to an appointment. Confirm when prompted.';
+          setConversationContext('delete');
+        } else if (userMessageLower.includes('recent') || userMessageLower.includes('latest')) {
+          response = recentAppointments.length > 0
+            ? `Recent appointments:\n${recentAppointments.map(app => `- ${app.name} (${app.positionTitle}, ${app.DateSigned})`).join('\n')}. Want details on any of these?`
+            : 'No recent appointments found. Try adding one!';
+          setConversationContext('recent');
+        } else if (userMessageLower.includes('stats') || userMessageLower.includes('statistics')) {
+          response = `You have ${appointments.length} total appointments. Breakdown by status: ${
+            appointments.reduce((acc, app) => ({
+              ...acc,
+              [app.statusAppointment]: (acc[app.statusAppointment] || 0) + 1,
+            }), {})
+            ? Object.entries(
+                appointments.reduce((acc, app) => ({
+                  ...acc,
+                  [app.statusAppointment]: (acc[app.statusAppointment] || 0) + 1,
+                  }), {})
+                )
+                  .map(([status, count]) => `${status}: ${count}`)
+                  .join(', ')
+              : 'No data'
+            }. Want to see the chart?`;
+          setConversationContext('stats');
+        } else if (userMessageLower.includes('template') && conversationContext === 'upload') {
+          response = 'A sample Excel template should have columns: name (text), positionTitle (text), statusAppointment (Scheduled/Confirmed/Completed), schoolOffice (text), DateSigned (date, e.g., YYYY-MM-DD). Want to know how to create one?';
+          setConversationContext('upload');
+        } else if (userMessageLower.includes('recover') && conversationContext === 'delete') {
+          response = 'Unfortunately, deleted appointments cannot be recovered in this system. Always confirm before deleting. Need help with anything else?';
+          setConversationContext('delete');
+        } else {
+          response = 'I can assist with adding, searching, uploading, deleting, or viewing appointment stats. Try the options below or ask something specific!';
+          setConversationContext(null);
+        }
+      }
+
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'bot',
+          text: response,
+          options: [
+            { label: 'Back to main options', value: 'back' },
+            { label: 'Ask another question', value: 'continue' },
+          ],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (err) {
+      setChatError(`Failed to get response: ${err.message}`);
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'bot',
+          text: 'Oops, something went wrong. Try the options below or type a question.',
+          options: [
+            { label: 'How to add an appointment?', value: 'add' },
+            { label: 'How to search appointments?', value: 'search' },
+            { label: 'How to upload Excel?', value: 'upload' },
+            { label: 'How to delete appointments?', value: 'delete' },
+            { label: 'Show recent appointments', value: 'recent' },
+            { label: 'View appointment stats', value: 'stats' },
+          ],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleVoiceInput = () => {
+    if (!speechRecognitionSupported) {
+      setChatError('Speech recognition is not supported in this browser.');
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      setIsListening(true);
+      setChatError(null);
+      recognitionRef.current.start();
+    }
+  };
+
+  const handleStopSpeaking = () => {
+    if (speechSynthesisSupported && isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
+  const formatTimestamp = (isoString) => {
+    const date = new Date(isoString);
+    return date.toLocaleString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'America/Los_Angeles',
+    });
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="chatbot-modal-overlay" role="dialog" aria-labelledby="chatbot-title">
+      <div className="chatbot-modal">
+        <div className="chatbot-header">
+          <span id="chatbot-title">Appointment Assistant</span>
+          <button
+            className="chatbot-close"
+            onClick={onClose}
+            aria-label="Close chatbot"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="chatbot-messages">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={`chatbot-message ${msg.sender}`}
+              aria-live={msg.sender === 'bot' ? 'polite' : 'off'}
+            >
+              <div className="message-content">
+                <span className="message-text">{msg.sender === 'user' ? msg.text.charAt(0).toUpperCase() + msg.text.slice(1) : msg.text}</span>
+                <span className="message-timestamp">{formatTimestamp(msg.timestamp)}</span>
+              </div>
+              {msg.options && (
+                <div className="chatbot-options">
+                  {msg.options.map((opt, i) => (
+                    <button
+                      key={i}
+                      className="chatbot-option"
+                      onClick={() => handleOptionClick(opt.value)}
+                      disabled={chatLoading}
+                      aria-label={opt.label}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {chatLoading && (
+            <div className="chatbot-loading" aria-live="polite">
+              <span className="typing-indicator">Typing...</span>
+            </div>
+          )}
+          {chatError && (
+            <div className="chatbot-error" aria-live="polite">
+              {chatError}
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+        <form onSubmit={handleSendMessage} className="chatbot-input-form">
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder="Type or speak your question (e.g., 'How to add an appointment?')"
+            className="chatbot-input"
+            disabled={chatLoading}
+            aria-label="Chatbot input"
+          />
+          <button
+            type="button"
+            className={`chatbot-voice-button ${isListening ? 'active' : ''} ${!speechRecognitionSupported ? 'disabled' : ''}`}
+            onClick={handleVoiceInput}
+            disabled={chatLoading || !speechRecognitionSupported}
+            aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
+          >
+            {isListening ? '🎙️ Stop' : '🎙️ Speak'}
+          </button>
+          <button
+            type="submit"
+            className={`chatbot-send-button ${chatLoading ? 'disabled' : ''}`}
+            disabled={chatLoading}
+            aria-label="Send message"
+          >
+            Send
+          </button>
+          {speechSynthesisSupported && (
+            <button
+              type="button"
+              className={`chatbot-stop-speak-button ${isSpeaking ? '' : 'disabled'}`}
+              onClick={handleStopSpeaking}
+              disabled={!isSpeaking}
+              aria-label="Stop speaking"
+            >
+              🛑 Stop Speaking
+            </button>
+          )}
+        </form>
+      </div>
+    </div>
+  );
+};
+
 function Appointment() {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -33,9 +502,11 @@ function Appointment() {
   const [selectedAppointments, setSelectedAppointments] = useState(new Set());
   const [chartData, setChartData] = useState({ labels: [], datasets: [] });
   const [chartLoading, setChartLoading] = useState(true);
+  const [showChatbot, setShowChatbot] = useState(false);
   const formRef = useRef(null);
+  const history = useHistory();
 
-  const navigate = useNavigate();
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 
   const validateForm = useCallback(() => {
     const errors = {};
@@ -51,7 +522,7 @@ function Appointment() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://localhost:3000/appointments');
+      const res = await fetch(`${API_URL}/appointments`);
       if (!res.ok) throw new Error(`Failed to fetch appointments: ${res.statusText}`);
       const data = await res.json();
       setAppointments(data);
@@ -60,22 +531,36 @@ function Appointment() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [API_URL]);
 
   const fetchChartData = useCallback(async () => {
     setChartLoading(true);
     try {
-      const res = await fetch('http://localhost:3000/appointments/graph?type=year');
+      const res = await fetch(`${API_URL}/appointments/graph?type=year`);
       if (!res.ok) throw new Error(`Failed to fetch chart data: ${res.statusText}`);
       const data = await res.json();
-      setChartData(data || { labels: [], datasets: [{ label: 'Appointments by Year', data: [], backgroundColor: 'rgba(75, 192, 192, 0.6)' }] });
+      setChartData(data || {
+        labels: [],
+        datasets: [{
+          label: 'Appointments by Year',
+          data: [],
+          backgroundColor: 'rgba(16, 185, 129, 0.6)',
+        }],
+      });
     } catch (err) {
       setError(`Failed to load chart data: ${err.message}`);
-      setChartData({ labels: [], datasets: [{ label: 'Appointments by Year', data: [], backgroundColor: 'rgba(75, 192, 192, 0.6)' }] });
+      setChartData({
+        labels: [],
+        datasets: [{
+          label: 'Appointments by Year',
+          data: [],
+          backgroundColor: 'rgba(16, 185, 129, 0.6)',
+        }],
+      });
     } finally {
       setChartLoading(false);
     }
-  }, []);
+  }, [API_URL]);
 
   useEffect(() => {
     fetchAppointments();
@@ -113,8 +598,8 @@ function Appointment() {
     try {
       let appointmentId = editingId;
       const url = appointmentId
-        ? `http://localhost:3000/appointments/${appointmentId}`
-        : 'http://localhost:3000/appointments';
+        ? `${API_URL}/appointments/${appointmentId}`
+        : `${API_URL}/appointments`;
       const method = appointmentId ? 'PUT' : 'POST';
 
       const formattedForm = {
@@ -135,7 +620,7 @@ function Appointment() {
       if (pdfFile) {
         const uploadForm = new FormData();
         uploadForm.append('attachment', pdfFile);
-        const uploadRes = await fetch(`http://localhost:3000/appointments/${appointmentId}/attachment`, {
+        const uploadRes = await fetch(`${API_URL}/appointments/${appointmentId}/attachment`, {
           method: 'POST',
           body: uploadForm,
         });
@@ -197,7 +682,7 @@ function Appointment() {
       setActionLoading(prev => ({ ...prev, delete: { ...prev.delete, [id]: true } }));
       setError(null);
       try {
-        const res = await fetch(`http://localhost:3000/appointments/${id}`, {
+        const res = await fetch(`${API_URL}/appointments/${id}`, {
           method: 'DELETE',
         });
         if (!res.ok) throw new Error(`Failed to delete appointment: ${res.statusText}`);
@@ -256,7 +741,7 @@ function Appointment() {
 
       try {
         const payload = { ids: Array.from(selectedAppointments) };
-        const res = await fetch('http://localhost:3000/appointments/delete', {
+        const res = await fetch(`${API_URL}/appointments/delete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -341,7 +826,7 @@ function Appointment() {
           throw new Error('No valid data found in Excel file. Ensure required fields (Name, Position Title, Status, School Office, Date Signed) are present.');
         }
 
-        const res = await fetch('http://localhost:3000/appointments/bulk', {
+        const res = await fetch(`${API_URL}/appointments/bulk`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ appointments: appointmentsData }),
@@ -349,7 +834,7 @@ function Appointment() {
 
         if (!res.ok) {
           const errorData = await res.json();
-          throw new Error(errorData.error || `Bulk upload failed: ${res.statusText}`);
+          throw new Error(errorData.error || `Failed to upload: ${res.statusText}`);
         }
 
         await fetchAppointments();
@@ -416,7 +901,7 @@ function Appointment() {
     },
   };
 
-  const filteredAppointments = appointments
+  const filteredAppointments = (appointments || [])
     .filter(app => {
       const term = searchTerm.toLowerCase();
       const date = app.DateSigned ? new Date(app.DateSigned).toLocaleDateString() : '';
@@ -462,7 +947,7 @@ function Appointment() {
               disabled={actionLoading.bulk}
             />
             <button
-              onClick={() => navigate('/employee-management')}
+              onClick={() => history.push('/')}
               className="nav-button"
             >
               Employee Management
@@ -675,7 +1160,7 @@ function Appointment() {
                       <td>
                         {app.pdfPath ? (
                           <a
-                            href={`http://localhost:3000${app.pdfPath}`}
+                            href={`${API_URL}${app.pdfPath}`}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
@@ -711,6 +1196,18 @@ function Appointment() {
         <div className="chart-container" style={{ height: '300px', width: '600px' }}>
           {chartLoading ? <div>Loading chart...</div> : <Bar data={chartData} options={chartOptions} />}
         </div>
+
+        <button
+          className="chatbot-toggle"
+          onClick={() => setShowChatbot(!showChatbot)}
+        >
+          {showChatbot ? 'Hide Chat' : 'Chat'}
+        </button>
+        <ChatbotModal
+          appointments={appointments}
+          isOpen={showChatbot}
+          onClose={() => setShowChatbot(false)}
+        />
       </main>
     </div>
   );

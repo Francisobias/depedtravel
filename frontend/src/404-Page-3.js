@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useHistory } from 'react-router-dom';
+import 'bootstrap/dist/css/bootstrap.min.css';
 import './404-Page-3.css';
 
 function PageNotFound() {
-  const navigate = useNavigate();
+  const history = useHistory(); // Changed from useNavigate
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isAnimated, setIsAnimated] = useState(true);
 
@@ -37,14 +38,14 @@ function PageNotFound() {
         <div className="button-group">
           <button
             className="back-button"
-            onClick={() => navigate('/')}
+            onClick={() => history.push('/')} // Changed from navigate('/')
             aria-label="Return to home page"
           >
             Return Home
           </button>
           <button
             className="back-button secondary"
-            onClick={() => navigate(-1)}
+            onClick={() => history.goBack()} // Changed from navigate(-1)
             aria-label="Go back to previous page"
           >
             Go Back
