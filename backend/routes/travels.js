@@ -84,6 +84,103 @@ router.post('/bulk', async (req, res) => {
   }
 });
 
+// === Bulk Update for TravelAuthority ===
+router.put('/bulk', upload.array('attachments', 100), async (req, res) => {
+  const entries = req.body.entries ? (Array.isArray(req.body.entries) ? req.body.entries : JSON.parse(req.body.entries)) : [];
+  const files = req.files || [];
+  if (!entries.length) {
+    files.forEach(file => fs.unlinkSync(path.join(__dirname, '../Uploads', file.filename)));
+    return res.status(400).json({ error: 'No entries provided' });
+  }
+
+  // Validate entries
+  const requiredFields = ['id', 'employeeID', 'positiondesignation', 'station', 'purpose', 'host', 'datesfrom', 'datesto', 'destination', 'area', 'sof'];
+  const invalidEntries = entries.filter(e => 
+    requiredFields.some(field => e[field] == null || e[field] === '')
+  );
+  if (invalidEntries.length) {
+    files.forEach(file => fs.unlinkSync(path.join(__dirname, '../Uploads', file.filename)));
+    return res.status(400).json({ error: 'All fields are required for each entry', details: invalidEntries });
+  }
+
+  // Map files to entry IDs
+  const attachmentMap = {};
+  files.forEach(file => {
+    const entryId = file.originalname.split('-')[0]; // Assuming filename format: {entryId}-filename
+    attachmentMap[entryId] = `/uploads/${file.filename}`;
+  });
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // Fetch existing entries to check for old attachments
+    const entryIds = entries.map(e => e.id);
+    const [existingEntries] = await connection.query('SELECT id, Attachment FROM TravelAuthority WHERE id IN (?)', [entryIds]);
+    const existingAttachmentMap = {};
+    existingEntries.forEach(entry => {
+      existingAttachmentMap[entry.id] = entry.Attachment;
+    });
+
+    // Prepare updates
+    const updatePromises = entries.map(async (entry) => {
+      const { id, employeeID, positiondesignation, station, purpose, host, datesfrom, datesto, destination, area, sof } = entry;
+      const attachmentPath = attachmentMap[id] || existingAttachmentMap[id] || null;
+
+      const query = `
+        UPDATE TravelAuthority 
+        SET employee_ID = ?, PositionDesignation = ?, Station = ?, Purpose = ?, 
+            Host = ?, DatesFrom = ?, DatesTo = ?, Destination = ?, Area = ?, sof = ?, Attachment = ?
+        WHERE id = ?
+      `;
+      const params = [
+        employeeID, positiondesignation, station, purpose, host, 
+        parseDMYtoYMD(datesfrom), parseDMYtoYMD(datesto), destination, area, sof, 
+        attachmentPath, id
+      ];
+      const [result] = await connection.query(query, params);
+
+      // Delete old attachment if replaced
+      if (attachmentMap[id] && existingAttachmentMap[id]) {
+        try {
+          fs.unlinkSync(path.join(__dirname, '../Uploads', existingAttachmentMap[id].replace('/uploads/', '')));
+        } catch (unlinkErr) {
+          console.warn(`Warning: Failed to delete old attachment for entry ${id}:`, unlinkErr.message);
+        }
+      }
+
+      return result.affectedRows;
+    });
+
+    // Execute all updates
+    const results = await Promise.all(updatePromises);
+    const updatedCount = results.reduce((sum, affectedRows) => sum + affectedRows, 0);
+
+    if (updatedCount !== entries.length) {
+      await connection.rollback();
+      files.forEach(file => fs.unlinkSync(path.join(__dirname, '../Uploads', file.filename)));
+      return res.status(404).json({ error: 'Some entries were not found' });
+    }
+
+    await connection.commit();
+    invalidateCache('/travels');
+    res.json({ message: `${updatedCount} travel entries updated` });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    files.forEach(file => {
+      try {
+        fs.unlinkSync(path.join(__dirname, '../Uploads', file.filename));
+      } catch (unlinkErr) {
+        console.warn('Warning: Failed to delete temporary file:', unlinkErr.message);
+      }
+    });
+    res.status(500).json({ error: 'Failed to update travel entries', details: err.message });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // === CRUD TravelAuthority with Attachment Support ===
 router.get('/', async (req, res) => {
   try {

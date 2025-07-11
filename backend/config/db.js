@@ -1,13 +1,14 @@
 const mysql = require('mysql2/promise');
 
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
+  host: '127.0.0.1',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
+  password: 'sdocamnorte2025*',
   database: process.env.DB_NAME || 'data_authority',
   connectionLimit: 10,
   waitForConnections: true,
   queueLimit: 0,
+  port: 3306,
 });
 
 if (!process.env.DB_HOST || !process.env.DB_NAME) {

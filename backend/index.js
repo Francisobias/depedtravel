@@ -9,6 +9,7 @@ const chatRoute = require('./routes/chat');
 
 const app = express();
 
+app.use(express.urlencoded({ extended: true }));
 // Middleware
 app.use(cors());
 app.use(express.json());
